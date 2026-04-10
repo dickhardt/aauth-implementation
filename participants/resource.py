@@ -13,6 +13,7 @@ from aauth.signing.verifier import verify_signature
 from aauth.signing.signer import sign_request
 from aauth.headers.signature_key import parse_signature_key
 from aauth.headers.signature_input import parse_signature_input
+from aauth.headers.accept_signature import build_accept_signature, SIGKEY_JKT, SIGKEY_URI
 from aauth.keys.jwk import jwk_to_public_key, public_key_to_jwk, generate_jwks, calculate_jwk_thumbprint
 from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.metadata.resource import generate_resource_metadata
@@ -145,11 +146,11 @@ class Resource:
         async def resource_metadata():
             """Resource metadata endpoint per AAuth spec Section 13.3."""
             jwks_uri = f"{self.resource_id}/jwks.json"
-            resource_token_endpoint = f"{self.resource_id}/resource/token"
+            authorization_endpoint = f"{self.resource_id}/authorize"
             metadata = generate_resource_metadata(
                 resource_id=self.resource_id,
                 jwks_uri=jwks_uri,
-                resource_token_endpoint=resource_token_endpoint,
+                authorization_endpoint=authorization_endpoint,
                 scope_descriptions={
                     "data.read": "Read access to your data",
                     "data.write": "Write access to your data",
@@ -241,41 +242,44 @@ class Resource:
         # - require=identity = requires identity (jwks, x509, or jwt with agent token) - Section 4.2
         # - require=auth-token; resource-token="..."; auth-server="..." = requires authorization - Section 4.3
         def build_aauth_challenge():
-            """Build AAuth challenge value based on endpoint requirements."""
+            """Build challenge header name and value based on endpoint requirements.
+
+            Returns tuple of (header_name, header_value).
+            Pseudonym/identity use Accept-Signature; auth-token uses AAuth-Requirement.
+            """
             if require_auth_token:
                 # For auth token endpoints, we need agent identity first to issue resource token
                 # So challenge for identity, then we can issue resource token on retry
-                return "requirement=identity"
+                return ("Accept-Signature", build_accept_signature(sigkey=SIGKEY_URI))
             elif required_scheme in ("jwks", "jwks_uri"):
-                return "requirement=identity"
+                return ("Accept-Signature", build_accept_signature(sigkey=SIGKEY_URI))
             elif required_scheme == "jwt":
-                # Shouldn't happen (handled by require_auth_token), but fallback
-                return "requirement=identity"
+                return ("Accept-Signature", build_accept_signature(sigkey=SIGKEY_URI))
             else:
                 # required_scheme == "hwk" or None - any signature is fine
-                return "requirement=pseudonym"
-        
+                return ("Accept-Signature", build_accept_signature(sigkey=SIGKEY_JKT))
+
         if not signature_input_header or not signature_header or not signature_key_header:
-            agent_auth_value = build_aauth_challenge()
-            
+            challenge_header_name, challenge_header_value = build_aauth_challenge()
+
             response = Response(
                 status_code=401,
-                headers={"Signature-Requirement": agent_auth_value},
+                headers={challenge_header_name: challenge_header_value},
                 content="Missing signature headers"
             )
             if _is_http_debug_enabled():
                 self._print_response_debug(response)
             return response
-        
+
         # Parse signature key to determine scheme
         try:
             parsed_key = parse_signature_key(signature_key_header)
         except Exception as e:
-            agent_auth_value = build_aauth_challenge()
-            
+            challenge_header_name, challenge_header_value = build_aauth_challenge()
+
             response = Response(
                 status_code=401,
-                headers={"Signature-Requirement": agent_auth_value},
+                headers={challenge_header_name: challenge_header_value},
                 content=f"Invalid Signature-Key header: {e}"
             )
             if _is_http_debug_enabled():
@@ -306,7 +310,7 @@ class Resource:
                             header = jwt_lib.get_unverified_header(jwt_token)
                             typ = header.get("typ")
                             
-                            if typ == "agent+jwt":
+                            if typ == "aa-agent+jwt":
                                 # Phase 6: Agent token is acceptable for identity requirement (SPEC.md Section 4.2)
                                 if _is_debug_enabled():
                                     print(f"DEBUG RESOURCE: scheme=jwt with agent token is acceptable for identity requirement", file=sys.stderr, flush=True)
@@ -316,10 +320,10 @@ class Resource:
                                 if _is_debug_enabled():
                                     print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme} (not agent token)", file=sys.stderr, flush=True)
                                 
-                                agent_auth_value = "requirement=identity"
+                                accept_sig_value = build_accept_signature(sigkey=SIGKEY_URI)
                                 response = Response(
                                     status_code=401,
-                                    headers={"Signature-Requirement": agent_auth_value},
+                                    headers={"Accept-Signature": accept_sig_value},
                                     content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                                 )
                                 if _is_http_debug_enabled():
@@ -330,10 +334,10 @@ class Resource:
                             if _is_debug_enabled():
                                 print(f"DEBUG RESOURCE: Failed to parse JWT token: {e}", file=sys.stderr, flush=True)
                             
-                            agent_auth_value = "requirement=identity"
+                            accept_sig_value = build_accept_signature(sigkey=SIGKEY_URI)
                             response = Response(
                                 status_code=401,
-                                headers={"Signature-Requirement": agent_auth_value},
+                                headers={"Accept-Signature": accept_sig_value},
                                 content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                             )
                             if _is_http_debug_enabled():
@@ -343,11 +347,11 @@ class Resource:
                         # No jwt parameter, reject
                         if _is_debug_enabled():
                             print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme} (no jwt parameter)", file=sys.stderr, flush=True)
-                        
-                        agent_auth_value = "requirement=identity"
+
+                        accept_sig_value = build_accept_signature(sigkey=SIGKEY_URI)
                         response = Response(
                             status_code=401,
-                            headers={"Signature-Requirement": agent_auth_value},
+                            headers={"Accept-Signature": accept_sig_value},
                             content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                         )
                         if _is_http_debug_enabled():
@@ -357,25 +361,19 @@ class Resource:
                     # Not the special case, reject normally
                     if _is_debug_enabled():
                         print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme}", file=sys.stderr, flush=True)
-                    
-                    # Build appropriate AAuth challenge based on required scheme
-                    # Per SPEC_UPDATED.md Section 4:
-                    # - require=pseudonym = any scheme (pseudonymous)
-                    # - require=identity = requires identity (jwks, x509, or jwt with agent token)
-                    # - require=auth-token = requires authorization (jwt with auth token)
+
+                    # Build appropriate Accept-Signature challenge based on required scheme
                     if required_scheme in ("jwks", "jwks_uri"):
-                        agent_auth_value = "requirement=identity"
+                        accept_sig_value = build_accept_signature(sigkey=SIGKEY_URI)
                     elif required_scheme == "jwt":
-                        # This shouldn't happen here (handled by require_auth_token above)
-                        # But if it does, we'd need resource_token and auth_server
-                        agent_auth_value = "requirement=identity"  # Fallback to identity requirement
+                        accept_sig_value = build_accept_signature(sigkey=SIGKEY_URI)
                     else:
                         # required_scheme == "hwk" or None - any signature is fine
-                        agent_auth_value = "requirement=pseudonym"
-                    
+                        accept_sig_value = build_accept_signature(sigkey=SIGKEY_JKT)
+
                     response = Response(
                         status_code=401,
-                        headers={"Signature-Requirement": agent_auth_value},
+                        headers={"Accept-Signature": accept_sig_value},
                         content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                     )
                     if _is_http_debug_enabled():
@@ -458,7 +456,7 @@ class Resource:
                     print("DEBUG RESOURCE: Signature verification failed", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"Signature-Requirement": "requirement=pseudonym"},
+                    headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_JKT)},
                     content="Invalid signature"
                 )
                 if _is_http_debug_enabled():
@@ -486,7 +484,7 @@ class Resource:
             if jwks_param:
                 response = Response(
                     status_code=401,
-                    headers={"Signature-Requirement": "requirement=identity"},
+                    headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                     content="Invalid Signature-Key: jwks parameter must not be present for sig=jwks"
                 )
                 if _is_http_debug_enabled():
@@ -496,7 +494,7 @@ class Resource:
             if not agent_id or not kid:
                 response = Response(
                     status_code=401,
-                    headers={"Signature-Requirement": "requirement=identity"},
+                    headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                     content="Missing id or kid in Signature-Key for sig=jwks"
                 )
                 if _is_http_debug_enabled():
@@ -529,7 +527,7 @@ class Resource:
                     print("DEBUG RESOURCE: Signature verification failed", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"Signature-Requirement": "requirement=pseudonym"},
+                    headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_JKT)},
                     content="Invalid signature"
                 )
                 if _is_http_debug_enabled():
@@ -557,7 +555,7 @@ class Resource:
             if not jwt_token:
                 response = Response(
                     status_code=401,
-                    headers={"Signature-Requirement": "requirement=identity"},
+                    headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                     content="Missing jwt parameter in Signature-Key for sig=jwt"
                 )
                 if _is_http_debug_enabled():
@@ -577,7 +575,7 @@ class Resource:
                     print(f"DEBUG RESOURCE:   Failed to parse token header: {e}", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"Signature-Requirement": "requirement=identity"},
+                    headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                     content="Invalid JWT token"
                 )
                 if _is_http_debug_enabled():
@@ -585,7 +583,7 @@ class Resource:
                 return response
             
             # Route to appropriate validator based on token type
-            if typ == "agent+jwt":
+            if typ == "aa-agent+jwt":
                 # Phase 6: Agent token (delegated identity)
                 if _is_debug_enabled():
                     print(f"DEBUG RESOURCE:   Validating as agent token (agent+jwt)", file=sys.stderr, flush=True)
@@ -596,7 +594,7 @@ class Resource:
                 if not agent_token_valid:
                     response = Response(
                         status_code=401,
-                        headers={"Signature-Requirement": "requirement=identity"},
+                        headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                         content="Invalid or expired agent token"
                     )
                     if _is_http_debug_enabled():
@@ -608,7 +606,7 @@ class Resource:
                     "message": "Access granted",
                     "data": "This is protected data (identified via agent token)",
                     "scheme": "jwt",
-                    "token_type": "agent+jwt",
+                    "token_type": "aa-agent+jwt",
                     "method": method,
                     "agent": agent_claims.get("iss"),  # Agent server identifier
                     "agent_delegate": agent_claims.get("sub")  # Delegate identifier
@@ -617,7 +615,7 @@ class Resource:
                     self._print_response_debug(response)
                 return response
             
-            elif typ == "auth+jwt":
+            elif typ == "aa-auth+jwt":
                 # Phase 3/4/5: Auth token (authorized request)
                 if _is_debug_enabled():
                     print(f"DEBUG RESOURCE:   Validating as auth token (auth+jwt)", file=sys.stderr, flush=True)
@@ -628,7 +626,7 @@ class Resource:
                 if not auth_token_valid:
                     response = Response(
                         status_code=401,
-                        headers={"Signature-Requirement": "requirement=auth-token"},
+                        headers={"AAuth-Requirement": "requirement=auth-token"},
                         content="Invalid or expired auth token"
                     )
                     if _is_http_debug_enabled():
@@ -640,7 +638,7 @@ class Resource:
                     "message": "Access granted",
                     "data": "This is protected data (authorized)",
                     "scheme": "jwt",
-                    "token_type": "auth+jwt",
+                    "token_type": "aa-auth+jwt",
                     "method": method,
                     "agent": auth_claims.get("agent"),
                     "agent_delegate": auth_claims.get("agent_delegate"),
@@ -654,7 +652,7 @@ class Resource:
                 # Unknown token type
                 response = Response(
                     status_code=401,
-                    headers={"Signature-Requirement": "requirement=identity"},
+                    headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                     content=f"Unsupported token type: {typ}"
                 )
                 if _is_http_debug_enabled():
@@ -664,7 +662,7 @@ class Resource:
         else:
             response = Response(
                 status_code=401,
-                headers={"Signature-Requirement": "requirement=pseudonym"},
+                headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_JKT)},
                 content=f"Unsupported signature scheme: {scheme}"
             )
             if _is_http_debug_enabled():
@@ -731,7 +729,7 @@ class Resource:
                 print(f"DEBUG RESOURCE: Cannot issue resource token - missing agent identity or key", file=sys.stderr, flush=True)
             return Response(
                 status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
+                headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                 content="Agent identity required for authorization"
             )
         
@@ -747,7 +745,7 @@ class Resource:
 
         response = Response(
             status_code=401,
-            headers={"Signature-Requirement": aauth_header},
+            headers={"AAuth-Requirement": aauth_header},
             content="Authorization required"
         )
         
@@ -862,7 +860,7 @@ class Resource:
             """Fetch auth server JWKS."""
             try:
                 # Fetch auth server metadata
-                metadata_url = f"{issuer_url}/.well-known/aauth-issuer"
+                metadata_url = f"{issuer_url}/.well-known/aauth-access"
                 metadata = fetch_metadata(metadata_url)
                 jwks_uri = metadata.get("jwks_uri")
                 if not jwks_uri:
@@ -883,7 +881,7 @@ class Resource:
             claims = verify_token(
                 jwt_token,
                 auth_jwks_fetcher,
-                expected_typ="auth+jwt",
+                expected_typ="aa-auth+jwt",
                 expected_aud=self.resource_id
             )
             
@@ -1240,7 +1238,7 @@ class Resource:
         if not signature_input_header or not signature_header or not signature_key_header:
             return JSONResponse(
                 status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
+                headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                 content={"error": "invalid_request", "error_description": "Missing signature headers"}
             )
         
@@ -1252,7 +1250,7 @@ class Resource:
         except Exception as e:
             return JSONResponse(
                 status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
+                headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                 content={"error": "invalid_request", "error_description": f"Invalid Signature-Key: {e}"}
             )
         
@@ -1260,7 +1258,7 @@ class Resource:
         if scheme not in ("jwks", "jwks_uri"):
             return JSONResponse(
                 status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
+                headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                 content={"error": "invalid_request", "error_description": "Resource token endpoint requires sig=jwks"}
             )
         
@@ -1269,7 +1267,7 @@ class Resource:
         if not agent_id:
             return JSONResponse(
                 status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
+                headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                 content={"error": "invalid_request", "error_description": "Could not extract agent identifier"}
             )
         
@@ -1294,7 +1292,7 @@ class Resource:
         if not is_valid:
             return JSONResponse(
                 status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
+                headers={"Accept-Signature": build_accept_signature(sigkey=SIGKEY_URI)},
                 content={"error": "invalid_signature", "error_description": "Signature verification failed"}
             )
         
@@ -1462,7 +1460,7 @@ class Resource:
             return initial_response
         
         # Parse AAuth challenge from response (with Agent-Auth fallback)
-        aauth_header = initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        aauth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("Accept-Signature", "") or initial_response.headers.get("Signature-Requirement", "")
         if debug:
             print(f"DEBUG RESOURCE:   Received AAuth challenge: {aauth_header}", file=sys.stderr, flush=True)
 
@@ -1728,7 +1726,7 @@ class Resource:
         if challenge_response.status_code != 401:
             return {"mode": "final_response", "response": challenge_response}
 
-        aauth_header = challenge_response.headers.get("Signature-Requirement", "") or challenge_response.headers.get("AAuth", "") or challenge_response.headers.get("Agent-Auth", "")
+        aauth_header = challenge_response.headers.get("AAuth-Requirement", "") or challenge_response.headers.get("Accept-Signature", "") or challenge_response.headers.get("Signature-Requirement", "")
         import re
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
         if not resource_token_match:
@@ -1773,13 +1771,18 @@ class Resource:
             body = token_response.json()
             pending_url = body.get("location") or token_response.headers.get("location")
             code = body.get("code")
-            metadata = fetch_metadata(f"{auth_server}/.well-known/aauth-issuer")
-            interaction_endpoint = metadata.get("interaction_endpoint")
+            # Get interaction URL from AAuth-Requirement header
+            aauth_req = token_response.headers.get("aauth-requirement") or token_response.headers.get("AAuth-Requirement")
+            interaction_url = None
+            if aauth_req:
+                from aauth.headers.aauth_header import parse_aauth_requirement
+                parsed = parse_aauth_requirement(aauth_req)
+                interaction_url = parsed.get("url")
             return {
                 "mode": "deferred",
                 "downstream_pending_url": pending_url,
                 "downstream_code": code,
-                "downstream_interaction_endpoint": interaction_endpoint,
+                "downstream_interaction_url": interaction_url,
             }
 
         return {"mode": "final_response", "response": token_response}
@@ -1834,7 +1837,7 @@ class Resource:
                 "local_interaction_code": interaction_code,
                 "downstream_pending_url": downstream_authz.get("downstream_pending_url"),
                 "downstream_code": downstream_authz.get("downstream_code"),
-                "downstream_interaction_endpoint": downstream_authz.get("downstream_interaction_endpoint"),
+                "downstream_interaction_url": downstream_authz.get("downstream_interaction_url"),
                 "downstream_url": self.downstream_resource_url,
                 "created_at": int(time.time()),
                 "expires_at": int(time.time()) + 600,
@@ -1844,12 +1847,12 @@ class Resource:
                 require="interaction",
                 code=interaction_code,
             )
-            body["interaction_endpoint"] = f"{self.resource_id}/interact"
             headers = build_pending_response_headers(
                 location=local_pending_url,
                 retry_after=2,
                 require="interaction",
                 code=interaction_code,
+                url=f"{self.resource_id}/interact",
             )
             return Response(content=json.dumps(body), status_code=202, headers=headers, media_type="application/json")
 
@@ -1934,11 +1937,11 @@ class Resource:
         if not selected:
             return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Invalid code"})
 
-        interaction_endpoint = selected.get("downstream_interaction_endpoint")
+        interaction_url = selected.get("downstream_interaction_url")
         downstream_code = selected.get("downstream_code")
-        if not interaction_endpoint or not downstream_code:
+        if not interaction_url or not downstream_code:
             return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Downstream interaction unavailable"})
-        return RedirectResponse(url=f"{interaction_endpoint}?code={downstream_code}", status_code=303)
+        return RedirectResponse(url=f"{interaction_url}?code={downstream_code}", status_code=303)
     
     def run(self):
         """Run the resource server."""

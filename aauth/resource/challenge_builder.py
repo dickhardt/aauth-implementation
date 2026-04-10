@@ -1,11 +1,8 @@
 """AAuth challenge building for resource role."""
 
-from typing import Optional
-from ..headers.aauth_header import (
-    build_pseudonym_challenge,
-    build_identity_challenge,
-    build_auth_token_challenge,
-)
+from typing import Optional, Tuple
+from ..headers.accept_signature import build_accept_signature, SIGKEY_JKT, SIGKEY_URI
+from ..headers.aauth_header import build_auth_token_requirement
 from ..tokens.resource_token import create_resource_token
 from ..keys.jwk import calculate_jwk_thumbprint, public_key_to_jwk
 from ..errors import ChallengeError
@@ -34,8 +31,12 @@ class ChallengeBuilder:
         agent_id: Optional[str] = None,
         agent_public_key=None,
         scope: Optional[str] = None
-    ) -> str:
-        """Build AAuth challenge header value.
+    ) -> Tuple[str, str]:
+        """Build challenge header name and value.
+
+        Returns a tuple of (header_name, header_value):
+          - pseudonym/identity: ("Accept-Signature", "sig=(...);sigkey=jkt|uri")
+          - auth-token: ("AAuth-Requirement", "requirement=auth-token; resource-token=...")
 
         Args:
             require_signature: Require HTTP signature (pseudonym level)
@@ -46,7 +47,7 @@ class ChallengeBuilder:
             scope: Required scope (for resource token)
 
         Returns:
-            AAuth header value
+            Tuple of (header_name, header_value)
 
         Raises:
             ChallengeError: If challenge cannot be built
@@ -70,9 +71,9 @@ class ChallengeBuilder:
                 kid=self.resource_kid
             )
 
-            return build_auth_token_challenge(resource_token, self.auth_server)
+            return ("AAuth-Requirement", build_auth_token_requirement(resource_token))
 
         if require_identity:
-            return build_identity_challenge()
+            return ("Accept-Signature", build_accept_signature(sigkey=SIGKEY_URI))
 
-        return build_pseudonym_challenge()
+        return ("Accept-Signature", build_accept_signature(sigkey=SIGKEY_JKT))

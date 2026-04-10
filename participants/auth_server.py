@@ -25,7 +25,7 @@ from aauth.signing.verifier import verify_signature
 from aauth.headers.signature_key import parse_signature_key
 from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.keys.jwk import public_key_to_jwk, generate_jwks, jwk_to_public_key, calculate_jwk_thumbprint
-from aauth.metadata.auth_server import generate_auth_metadata, fetch_metadata as fetch_resource_metadata
+from aauth.metadata.auth_server import generate_as_metadata, generate_ps_metadata, fetch_metadata as fetch_resource_metadata
 from aauth.tokens.auth_token import verify_token, create_auth_token
 from aauth.http.deferred import (
     generate_pending_id, generate_interaction_code,
@@ -100,18 +100,36 @@ class AuthServer:
             jwk = public_key_to_jwk(self.public_key, kid=self.kid)
             return generate_jwks([jwk])
 
-        @self.app.get("/.well-known/aauth-issuer")
-        @self.app.get("/.well-known/aauth-issuer.json")
-        async def metadata():
-            """Auth server metadata endpoint per spec Section 13.2."""
+        @self.app.get("/.well-known/aauth-person")
+        @self.app.get("/.well-known/aauth-person.json")
+        async def ps_metadata():
+            """Person Server metadata endpoint (agent-facing).
+
+            This combined PS+AS serves aauth-person.json for agents.
+            """
             jwks_uri = f"{self.auth_id}/jwks.json"
             token_endpoint = f"{self.auth_id}/token"
-            interaction_endpoint = f"{self.auth_id}/interact"
-            return generate_auth_metadata(
-                auth_id=self.auth_id,
+            mission_endpoint = f"{self.auth_id}/mission"
+            return generate_ps_metadata(
+                ps_id=self.auth_id,
                 jwks_uri=jwks_uri,
                 token_endpoint=token_endpoint,
-                interaction_endpoint=interaction_endpoint,
+                mission_endpoint=mission_endpoint,
+            )
+
+        @self.app.get("/.well-known/aauth-access")
+        @self.app.get("/.well-known/aauth-access.json")
+        async def as_metadata():
+            """Access Server metadata endpoint (PS-facing).
+
+            This combined PS+AS also serves aauth-access.json.
+            """
+            jwks_uri = f"{self.auth_id}/jwks.json"
+            token_endpoint = f"{self.auth_id}/token"
+            return generate_as_metadata(
+                as_id=self.auth_id,
+                jwks_uri=jwks_uri,
+                token_endpoint=token_endpoint,
             )
 
         @self.app.post("/token")
@@ -286,7 +304,7 @@ class AuthServer:
                     content={"error": "invalid_request", "error_description": f"Invalid JWT token: {e}"}
                 )
             
-            if typ == "agent+jwt":
+            if typ == "aa-agent+jwt":
                 # Phase 6: Agent token (delegated identity)
                 if debug:
                     print(f"DEBUG AUTH:   Validating agent token (agent+jwt)", file=sys.stderr, flush=True)
@@ -340,7 +358,7 @@ class AuthServer:
                         content={"error": "invalid_token", "error_description": f"Invalid agent token: {e}"}
                     )
             
-            elif typ == "auth+jwt":
+            elif typ == "aa-auth+jwt":
                 # Phase 3/4/5: Auth token (for token exchange or refresh)
                 # This is handled elsewhere, but we shouldn't reach here for initial token requests
                 if debug:
@@ -590,7 +608,7 @@ class AuthServer:
             claims = verify_token(
                 token=token,
                 jwks_fetcher=resource_jwks_fetcher,
-                expected_typ="resource+jwt",
+                expected_typ="aa-resource+jwt",
                 expected_aud=self.auth_id  # Resource token audience must be this auth server
             )
         except Exception as e:
@@ -737,11 +755,13 @@ class AuthServer:
             require="interaction",
             code=interaction_code,
         )
+        interaction_url = f"{self.auth_id}/interact"
         headers = build_pending_response_headers(
             location=pending_url,
             retry_after=2,
             require="interaction",
             code=interaction_code,
+            url=interaction_url,
         )
 
         return Response(
@@ -1223,7 +1243,7 @@ class AuthServer:
                 content={"error": "invalid_token", "error_description": f"Invalid upstream token: {e}"}
             )
         
-        if upstream_typ != "auth+jwt":
+        if upstream_typ != "aa-auth+jwt":
             return JSONResponse(
                 status_code=401,
                 content={"error": "invalid_token", "error_description": f"Token exchange requires auth+jwt, got {upstream_typ}"}
@@ -1274,7 +1294,7 @@ class AuthServer:
             import httpx
             
             # Fetch upstream auth server metadata
-            metadata_url = f"{upstream_iss}/.well-known/aauth-issuer"
+            metadata_url = f"{upstream_iss}/.well-known/aauth-access"
             if debug:
                 print(f"DEBUG AUTH:   Fetching upstream auth server metadata from {metadata_url}", file=sys.stderr, flush=True)
             
@@ -1375,7 +1395,7 @@ class AuthServer:
             resource_claims = verify_token(
                 resource_token,
                 resource_jwks_fetcher,
-                expected_typ="resource+jwt",
+                expected_typ="aa-resource+jwt",
                 expected_aud=self.auth_id
             )
             

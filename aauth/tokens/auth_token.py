@@ -19,22 +19,27 @@ def create_auth_token(
     scope: Optional[str] = None,
     sub: Optional[str] = None,
     exp: Optional[int] = None,
+    mission: Optional[Dict[str, str]] = None,
+    dwk: Optional[str] = None,
 ) -> str:
-    """Create an auth token (auth+jwt) per AAuth spec Section 9.1.
+    """Create an auth token (aa-auth+jwt) per AAuth spec.
 
     Args:
-        iss: Auth server identifier (HTTPS URL)
+        iss: Issuer identifier (HTTPS URL) — AS or PS
         aud: Resource identifier, or agent identifier for self-access
         agent: Agent identifier (HTTPS URL) - omitted from token when agent == aud (self-access)
         cnf_jwk: Agent's public signing key (JWK format)
-        private_key: Auth server's Ed25519 private key for signing
+        private_key: Issuer's Ed25519 private key for signing
         kid: Key ID for signing key
         scope: Authorized scopes (at least one of scope or sub MUST be present)
         sub: User identifier (at least one of scope or sub MUST be present)
         exp: Expiration timestamp. Defaults to 1 hour from now.
+        mission: Optional mission object with 'approver' and 's256' keys
+        dwk: Well-known metadata document name. Defaults to "aauth-access.json" (AS-issued).
+             Use "aauth-person.json" when issued by a PS.
 
     Returns:
-        Signed JWT string (auth+jwt)
+        Signed JWT string (aa-auth+jwt)
 
     Raises:
         TokenError: If neither sub nor scope is provided
@@ -42,7 +47,7 @@ def create_auth_token(
     if not sub and not scope:
         raise TokenError(
             "At least one of 'sub' or 'scope' must be present in auth token",
-            token_type="auth+jwt"
+            token_type="aa-auth+jwt"
         )
 
     now = int(time.time())
@@ -50,7 +55,7 @@ def create_auth_token(
         exp = now + 3600  # 1 hour
 
     header = {
-        "typ": "auth+jwt",
+        "typ": "aa-auth+jwt",
         "alg": "EdDSA",
         "kid": kid
     }
@@ -58,7 +63,7 @@ def create_auth_token(
     payload = {
         "iss": iss,
         "aud": aud,
-        "dwk": "aauth-issuer.json",
+        "dwk": dwk or "aauth-access.json",
         "jti": str(uuid.uuid4()),
         "cnf": {"jwk": cnf_jwk},
         "iat": now,
@@ -73,6 +78,8 @@ def create_auth_token(
         payload["sub"] = sub
     if scope:
         payload["scope"] = scope
+    if mission is not None:
+        payload["mission"] = mission
     return jwt.encode(
         payload,
         private_key,

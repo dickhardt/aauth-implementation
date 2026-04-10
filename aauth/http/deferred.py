@@ -70,6 +70,7 @@ def build_pending_response_headers(
     retry_after: int = 0,
     require: Optional[str] = None,
     code: Optional[str] = None,
+    url: Optional[str] = None,
 ) -> Dict[str, str]:
     """Build response headers for a 202 Accepted pending response.
 
@@ -78,6 +79,7 @@ def build_pending_response_headers(
         retry_after: Seconds before agent should poll (default: 0)
         require: Requirement level for AAuth header
         code: Interaction code for AAuth header
+        url: Interaction URL for AAuth header (required with interaction requirement)
 
     Returns:
         Headers dictionary
@@ -90,10 +92,16 @@ def build_pending_response_headers(
     }
 
     # Build AAuth-Requirement header if needed
-    if require == "interaction" and code:
-        headers["Signature-Requirement"] = f'requirement=interaction; code="{code}"'
+    if require == "interaction" and url and code:
+        headers["AAuth-Requirement"] = f'requirement=interaction; url="{url}"; code="{code}"'
+    elif require == "interaction" and code:
+        headers["AAuth-Requirement"] = f'requirement=interaction; code="{code}"'
     elif require == "approval":
-        headers["Signature-Requirement"] = "requirement=approval"
+        headers["AAuth-Requirement"] = "requirement=approval"
+    elif require == "clarification":
+        headers["AAuth-Requirement"] = "requirement=clarification"
+    elif require == "claims":
+        headers["AAuth-Requirement"] = "requirement=claims"
 
     return headers
 

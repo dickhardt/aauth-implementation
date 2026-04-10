@@ -290,15 +290,34 @@ class Agent:
                     print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
         
-        # Handle auth token challenge (AAuth-Requirement, AAuth, or Agent-Auth header)
+        # Handle auth token challenge (AAuth-Requirement or Accept-Signature header)
         if response.status_code == 401:
-            aauth_header = response.headers.get("signature-requirement", "") or response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
+            aauth_req_header = response.headers.get("aauth-requirement", "")
+            accept_sig_header = response.headers.get("accept-signature", "")
+            legacy_header = response.headers.get("signature-requirement", "")
+            aauth_header = aauth_req_header or accept_sig_header or legacy_header
             if debug:
                 logger.debug(f"Received 401, challenge header: {aauth_header}")
 
             if aauth_header:
-                parsed = parse_aauth_header(aauth_header)
-                require = parsed.get("requirement") or parsed.get("require", "")
+                # Parse Accept-Signature headers differently from AAuth-Requirement
+                if accept_sig_header and not aauth_req_header:
+                    from aauth.headers.accept_signature import parse_accept_signature, SIGKEY_JKT, SIGKEY_URI
+                    try:
+                        accept_parsed = parse_accept_signature(accept_sig_header)
+                        sigkey = accept_parsed.get("sigkey")
+                        # Map sigkey to legacy requirement values for downstream processing
+                        if sigkey == SIGKEY_URI:
+                            parsed = {"requirement": "identity", "require": "identity", "resource_token": None, "url": None, "code": None}
+                        else:
+                            parsed = {"requirement": "pseudonym", "require": "pseudonym", "resource_token": None, "url": None, "code": None}
+                        require = parsed["requirement"]
+                    except Exception:
+                        parsed = parse_aauth_header(aauth_header)
+                        require = parsed.get("requirement") or parsed.get("require", "")
+                else:
+                    parsed = parse_aauth_header(aauth_header)
+                    require = parsed.get("requirement") or parsed.get("require", "")
                 # Fall back to old Agent-Auth format
                 if not require and "resource_token" in aauth_header:
                     import re as _re
@@ -356,13 +375,19 @@ class Agent:
         debug = _is_debug_enabled()
         body = initial_response.json()
         pending_url = body.get("location") or initial_response.headers.get("location")
-        interaction_endpoint = body.get("interaction_endpoint")
         code = body.get("code")
+        # Get interaction URL from AAuth-Requirement header
+        aauth_req = initial_response.headers.get("aauth-requirement") or initial_response.headers.get("AAuth-Requirement")
+        interaction_url = None
+        if aauth_req:
+            from aauth.headers.aauth_header import parse_aauth_requirement
+            parsed = parse_aauth_requirement(aauth_req)
+            if parsed.get("url") and code:
+                interaction_url = f"{parsed['url']}?code={code}"
         interacted = False
 
         # Handle user interaction once when requested.
-        if interaction_endpoint and code:
-            interaction_url = f"{interaction_endpoint}?code={code}"
+        if interaction_url:
             if self.use_user_simulator:
                 from participants.user_simulator import UserSimulator
                 user_sim = UserSimulator()
@@ -385,13 +410,17 @@ class Agent:
                     return poll_response
 
                 poll_body = poll_response.json()
-                if not interacted and poll_body.get("require") == "interaction":
-                    poll_code = poll_body.get("code")
-                    poll_interaction_endpoint = poll_body.get("interaction_endpoint") or interaction_endpoint
-                    if poll_code and poll_interaction_endpoint and self.use_user_simulator:
-                        from participants.user_simulator import UserSimulator
-                        user_sim = UserSimulator()
-                        interacted = await user_sim.complete_interaction(f"{poll_interaction_endpoint}?code={poll_code}")
+                poll_aauth_req = poll_response.headers.get("aauth-requirement") or poll_response.headers.get("AAuth-Requirement")
+                if not interacted and poll_aauth_req:
+                    from aauth.headers.aauth_header import parse_aauth_requirement
+                    poll_parsed = parse_aauth_requirement(poll_aauth_req)
+                    if poll_parsed.get("requirement") == "interaction" and poll_parsed.get("url"):
+                        poll_code = poll_parsed.get("code") or poll_body.get("code")
+                        poll_interaction_url = f"{poll_parsed['url']}?code={poll_code}" if poll_code else None
+                        if poll_interaction_url and self.use_user_simulator:
+                            from participants.user_simulator import UserSimulator
+                            user_sim = UserSimulator()
+                            interacted = await user_sim.complete_interaction(poll_interaction_url)
                         if not interacted:
                             return httpx.Response(
                                 status_code=500,
@@ -427,7 +456,7 @@ class Agent:
 
         # Fetch auth server metadata
         try:
-            metadata_url = f"{auth_server}/.well-known/aauth-issuer"
+            metadata_url = f"{auth_server}/.well-known/aauth-person"
             metadata = await fetch_auth_metadata(metadata_url)
             token_endpoint = metadata.get("token_endpoint")
             if debug:
@@ -440,7 +469,7 @@ class Agent:
         # Build JSON request body (self-access mode: scope, no resource_token)
         body_dict = {"scope": scope}
         return await self._send_token_request(token_endpoint, body_dict, auth_server)
-    
+
     async def _request_auth_token(self, resource_token: str, auth_server: str) -> Optional[str]:
         """Request auth token from auth server (resource access mode).
 
@@ -458,7 +487,7 @@ class Agent:
 
         # Fetch auth server metadata
         try:
-            metadata_url = f"{auth_server}/.well-known/aauth-issuer"
+            metadata_url = f"{auth_server}/.well-known/aauth-person"
             metadata = await fetch_auth_metadata(metadata_url)
             token_endpoint = metadata.get("token_endpoint")
             if debug:
@@ -554,7 +583,7 @@ class Agent:
         body = response.json()
         pending_url = body.get("location") or response.headers.get("location")
         # Check AAuth-Requirement header first, then fall back to body
-        aauth_req_header = response.headers.get("signature-requirement", "")
+        aauth_req_header = response.headers.get("aauth-requirement", "") or response.headers.get("AAuth-Requirement", "")
         if aauth_req_header:
             parsed_req = parse_aauth_header(aauth_req_header)
             require = parsed_req.get("requirement") or parsed_req.get("require")
@@ -571,19 +600,16 @@ class Agent:
         if debug:
             logger.debug(f"Deferred response: pending_url={pending_url}, require={require}, code={code}")
 
-        # If interaction required, direct user to interaction endpoint
+        # If interaction required, get URL from AAuth-Requirement header
         if require == "interaction" and code:
             try:
-                # Prefer url from AAuth-Requirement header, fall back to metadata
-                interaction_endpoint = None
+                interaction_url = None
                 if aauth_req_header:
                     parsed_req = parse_aauth_header(aauth_req_header)
-                    interaction_endpoint = parsed_req.get("url")
-                if not interaction_endpoint:
-                    metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
-                    interaction_endpoint = metadata.get("interaction_endpoint")
-                if interaction_endpoint:
-                    interaction_url = f"{interaction_endpoint}?code={code}"
+                    url = parsed_req.get("url")
+                    if url:
+                        interaction_url = f"{url}?code={code}"
+                if interaction_url:
 
                     if self.use_user_simulator:
                         if debug:

@@ -18,45 +18,31 @@ def run_server(server):
         pass
 
 
-@pytest.fixture
-def agent_id():
-    return "http://127.0.0.1:8001"
-
-
-@pytest.fixture
-def auth_id():
-    return "http://127.0.0.1:8003"
-
-
-@pytest.fixture
-def agent(agent_id):
-    return Agent(agent_id, port=8001, use_user_simulator=True)
-
-
-@pytest.fixture
-def auth_server(auth_id):
-    return AuthServer(auth_id, port=8003, require_user_consent=True)
-
-
 @pytest.mark.asyncio
-async def test_agent_is_resource_flow(agent, auth_server, agent_id, auth_id):
+async def test_agent_is_resource_flow():
     """Test that agent can request authorization to itself."""
+    agent_id = "http://127.0.0.1:8051"
+    auth_id = "http://127.0.0.1:8053"
+    agent = Agent(agent_id, port=8051, use_user_simulator=True)
+    auth_server = AuthServer(auth_id, port=8053, require_user_consent=True)
+
+    # Start agent server (auth server needs to fetch agent's JWKS)
+    agent_thread = threading.Thread(target=run_server, args=(agent,), daemon=True)
+    agent_thread.start()
+
     # Start auth server in background
     auth_thread = threading.Thread(target=run_server, args=(auth_server,), daemon=True)
     auth_thread.start()
-    
-    # Wait for server to start
+
+    # Wait for servers to start
     await asyncio.sleep(1)
     
     try:
         # Request self-authorization
         scope = "profile email"
-        redirect_uri = f"{agent_id}/callback"
-        
         auth_token = await agent.request_self_authorization(
             scope=scope,
             auth_server=auth_id,
-            redirect_uri=redirect_uri
         )
         
         # Verify token was obtained
@@ -84,24 +70,30 @@ async def test_agent_is_resource_flow(agent, auth_server, agent_id, auth_id):
 
 
 @pytest.mark.asyncio
-async def test_auth_token_claims_when_agent_is_resource(agent, auth_server, agent_id, auth_id):
+async def test_auth_token_claims_when_agent_is_resource():
     """Test that auth token has correct claims when agent is resource."""
+    agent_id = "http://127.0.0.1:8061"
+    auth_id = "http://127.0.0.1:8063"
+    agent = Agent(agent_id, port=8061, use_user_simulator=True)
+    auth_server = AuthServer(auth_id, port=8063, require_user_consent=True)
+
+    # Start agent server (auth server needs to fetch agent's JWKS)
+    agent_thread = threading.Thread(target=run_server, args=(agent,), daemon=True)
+    agent_thread.start()
+
     # Start auth server in background
     auth_thread = threading.Thread(target=run_server, args=(auth_server,), daemon=True)
     auth_thread.start()
-    
-    # Wait for server to start
+
+    # Wait for servers to start
     await asyncio.sleep(1)
     
     try:
         # Request self-authorization
         scope = "profile email"
-        redirect_uri = f"{agent_id}/callback"
-        
         auth_token = await agent.request_self_authorization(
             scope=scope,
             auth_server=auth_id,
-            redirect_uri=redirect_uri
         )
         
         assert auth_token is not None
@@ -112,7 +104,7 @@ async def test_auth_token_claims_when_agent_is_resource(agent, auth_server, agen
         header = claims["header"]
         
         # Verify token type
-        assert header.get("typ") == "auth+jwt", "Token type should be auth+jwt"
+        assert header.get("typ") == "aa-auth+jwt", "Token type should be auth+jwt"
         
         # Verify aud = agent identifier
         assert payload.get("aud") == agent_id

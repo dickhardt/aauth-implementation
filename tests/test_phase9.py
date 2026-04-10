@@ -12,7 +12,7 @@ def test_resource_interact_redirects_to_downstream_interaction():
     resource.chained_pending_requests[pending_id] = {
         "local_interaction_code": "LOCAL123",
         "downstream_code": "DOWN456",
-        "downstream_interaction_endpoint": "http://127.0.0.1:8005/interact",
+        "downstream_interaction_url": "http://127.0.0.1:8005/interact",
     }
     client = TestClient(resource.app)
     response = client.get("/interact?code=LOCAL123", follow_redirects=False)

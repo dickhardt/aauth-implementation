@@ -41,7 +41,7 @@ class TestTokenGeneration:
         
         # Parse token to verify claims
         claims = parse_token_claims(token)
-        assert claims["header"]["typ"] == "resource+jwt"
+        assert claims["header"]["typ"] == "aa-resource+jwt"
         assert claims["payload"]["iss"] == "https://resource.example"
         assert claims["payload"]["aud"] == "https://auth.example"
         assert claims["payload"]["agent"] == "https://agent.example"
@@ -69,7 +69,7 @@ class TestTokenGeneration:
         
         # Parse token to verify claims
         claims = parse_token_claims(token)
-        assert claims["header"]["typ"] == "auth+jwt"
+        assert claims["header"]["typ"] == "aa-auth+jwt"
         assert claims["payload"]["iss"] == "https://auth.example"
         assert claims["payload"]["aud"] == "https://resource.example"
         assert claims["payload"]["agent"] == "https://agent.example"
@@ -158,7 +158,7 @@ class TestTokenVerification:
         claims = verify_token(
             token=token,
             jwks_fetcher=resource_jwks_fetcher,
-            expected_typ="resource+jwt",
+            expected_typ="aa-resource+jwt",
             expected_aud="https://auth.example"
         )
         
@@ -198,7 +198,7 @@ class TestTokenVerification:
         claims = verify_token(
             token=token,
             jwks_fetcher=auth_jwks_fetcher,
-            expected_typ="auth+jwt",
+            expected_typ="aa-auth+jwt",
             expected_aud="https://resource.example"
         )
         
@@ -237,7 +237,7 @@ class TestTokenVerification:
             verify_token(
                 token=token,
                 jwks_fetcher=jwks_fetcher,
-                expected_typ="resource+jwt"
+                expected_typ="aa-resource+jwt"
             )
 
 
@@ -261,14 +261,23 @@ class TestAuthServer:
         
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get("http://127.0.0.1:8003/.well-known/aauth-issuer")
+                # Test PS metadata (agent-facing)
+                response = await client.get("http://127.0.0.1:8003/.well-known/aauth-person")
                 assert response.status_code == 200
-                
+
+                ps_metadata = response.json()
+                assert ps_metadata["issuer"] == "https://auth.example"
+                assert "jwks_uri" in ps_metadata
+                assert "token_endpoint" in ps_metadata
+
+                # Test AS metadata (PS-facing)
+                response = await client.get("http://127.0.0.1:8003/.well-known/aauth-access")
+                assert response.status_code == 200
+
                 metadata = response.json()
                 assert metadata["issuer"] == "https://auth.example"
                 assert "jwks_uri" in metadata
                 assert "token_endpoint" in metadata
-                assert "interaction_endpoint" in metadata
         finally:
             pass
     
@@ -305,29 +314,29 @@ class TestEndToEndFlow:
     @pytest.mark.asyncio
     async def test_autonomous_flow(self):
         """Test complete autonomous authorization flow."""
-        # Create participants
-        agent_id = "http://127.0.0.1:8001"
-        resource_id = "http://127.0.0.1:8002"
-        auth_id = "http://127.0.0.1:8003"
-        
-        agent = Agent(agent_id, port=8001)
-        resource = Resource(resource_id, port=8002, auth_server=auth_id)
-        auth_server = AuthServer(auth_id, port=8003)
-        
+        # Create participants (use different ports to avoid conflicts with prior tests)
+        agent_id = "http://127.0.0.1:8031"
+        resource_id = "http://127.0.0.1:8032"
+        auth_id = "http://127.0.0.1:8033"
+
+        agent = Agent(agent_id, port=8031)
+        resource = Resource(resource_id, port=8032, auth_server=auth_id)
+        auth_server = AuthServer(auth_id, port=8033)
+
         # Start servers
         import uvicorn
         import threading
-        
+
         agent_thread = threading.Thread(
-            target=lambda: uvicorn.run(agent.app, host="127.0.0.1", port=8001, log_level="error"),
+            target=lambda: uvicorn.run(agent.app, host="127.0.0.1", port=8031, log_level="error"),
             daemon=True
         )
         resource_thread = threading.Thread(
-            target=lambda: uvicorn.run(resource.app, host="127.0.0.1", port=8002, log_level="error"),
+            target=lambda: uvicorn.run(resource.app, host="127.0.0.1", port=8032, log_level="error"),
             daemon=True
         )
         auth_thread = threading.Thread(
-            target=lambda: uvicorn.run(auth_server.app, host="127.0.0.1", port=8003, log_level="error"),
+            target=lambda: uvicorn.run(auth_server.app, host="127.0.0.1", port=8033, log_level="error"),
             daemon=True
         )
         

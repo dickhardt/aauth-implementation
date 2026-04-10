@@ -396,91 +396,91 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_jwks_endpoint_with_jwks_scheme(self):
         """Test /data-jwks endpoint with sig=jwks."""
-        # Start resource server
-        resource = Resource("https://resource.example.com", port=8002)
-        
+        # Start resource server (use different ports to avoid conflicts with prior tests)
+        resource = Resource("https://resource.example.com", port=8012)
+
         # Start server in background
         import uvicorn
         import threading
         server_thread = threading.Thread(
-            target=lambda: uvicorn.run(resource.app, host="127.0.0.1", port=8002, log_level="error"),
+            target=lambda: uvicorn.run(resource.app, host="127.0.0.1", port=8012, log_level="error"),
             daemon=True
         )
         server_thread.start()
-        
+
         # Wait for server to start
         await asyncio.sleep(1)
-        
+
         # Start agent server with local URL
-        agent = Agent("http://127.0.0.1:8001", port=8001)
-        
+        agent = Agent("http://127.0.0.1:8011", port=8011)
+
         # Start agent server in background
         agent_thread = threading.Thread(
-            target=lambda: uvicorn.run(agent.app, host="127.0.0.1", port=8001, log_level="error"),
+            target=lambda: uvicorn.run(agent.app, host="127.0.0.1", port=8011, log_level="error"),
             daemon=True
         )
         agent_thread.start()
-        
+
         # Wait for servers to start
         await asyncio.sleep(1)
-        
+
         try:
             # Request /data-jwks with sig=jwks
             response = await agent.request_resource(
-                "http://127.0.0.1:8002/data-jwks",
+                "http://127.0.0.1:8012/data-jwks",
                 sig_scheme="jwks_uri"
             )
-            
+
             assert response.status_code == 200
             data = response.json()
             assert data["scheme"] == "jwks_uri"
             assert "agent_id" in data
         finally:
             pass
-    
+
     @pytest.mark.asyncio
     async def test_both_endpoints_work_independently(self):
         """Test that both endpoints work independently."""
-        # Start resource server
-        resource = Resource("https://resource.example.com", port=8002)
-        
+        # Start resource server (use different ports to avoid conflicts with prior tests)
+        resource = Resource("https://resource.example.com", port=9022)
+
         # Start server in background
         import uvicorn
         import threading
         server_thread = threading.Thread(
-            target=lambda: uvicorn.run(resource.app, host="127.0.0.1", port=8002, log_level="error"),
+            target=lambda: uvicorn.run(resource.app, host="127.0.0.1", port=9022, log_level="error"),
             daemon=True
         )
         server_thread.start()
-        
+
         # Wait for server to start
         await asyncio.sleep(1)
-        
+
         # Start agent server with local URL
-        agent = Agent("http://127.0.0.1:8001", port=8001)
-        
+        agent = Agent("http://127.0.0.1:9021", port=9021)
+
         # Start agent server in background
         agent_thread = threading.Thread(
-            target=lambda: uvicorn.run(agent.app, host="127.0.0.1", port=8001, log_level="error"),
+            target=lambda: uvicorn.run(agent.app, host="127.0.0.1", port=9021, log_level="error"),
             daemon=True
         )
         agent_thread.start()
-        
+
         # Wait for servers to start
         await asyncio.sleep(1)
-        
+
         try:
             # Test /data-hwk with sig=hwk
             response_hwk = await agent.request_resource(
-                "http://127.0.0.1:8002/data-hwk",
+                "http://127.0.0.1:9022/data-hwk",
                 sig_scheme="hwk"
             )
             assert response_hwk.status_code == 200
             assert response_hwk.json()["scheme"] == "hwk"
-            
+
             # Test /data-jwks with sig=jwks
             response_jwks = await agent.request_resource(
-                "http://127.0.0.1:8002/data-jwks",
+                "http://127.0.0.1:9022/data-jwks",
                 sig_scheme="jwks_uri"
             )
             assert response_jwks.status_code == 200

@@ -1,34 +1,75 @@
-"""Auth server metadata handling for AAuth.
+"""Person Server (PS) and Access Server (AS) metadata handling for AAuth.
 
-Published at /.well-known/aauth-issuer.json
+PS metadata published at /.well-known/aauth-person.json
+AS metadata published at /.well-known/aauth-access.json
 """
 
 from typing import Dict, Any, Optional
 
 
-def generate_auth_metadata(
-    auth_id: str,
+def generate_ps_metadata(
+    ps_id: str,
     jwks_uri: str,
     token_endpoint: str,
-    interaction_endpoint: str,
+    mission_endpoint: Optional[str] = None,
+    mission_control_endpoint: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Generate auth server metadata JSON per AAuth spec Section 13.2.
+    """Generate Person Server (PS) metadata JSON.
+
+    Published at /.well-known/aauth-person.json.
+    Agents send token requests to their PS.
 
     Args:
-        auth_id: Auth server identifier (HTTPS URL) - REQUIRED
-        jwks_uri: URL to auth server's JSON Web Key Set - REQUIRED
-        token_endpoint: Single endpoint for all agent-to-auth-server communication - REQUIRED
-        interaction_endpoint: URL where users are sent for authentication and consent - REQUIRED
+        ps_id: PS identifier (HTTPS URL) - REQUIRED
+        jwks_uri: URL to PS's JSON Web Key Set - REQUIRED
+        token_endpoint: URL where agents send token requests - REQUIRED
+        mission_endpoint: URL for mission lifecycle operations (optional)
+        mission_control_endpoint: URL for mission administrative interface (optional)
 
     Returns:
-        Auth server metadata dictionary
+        PS metadata dictionary
     """
-    return {
-        "issuer": auth_id,
+    metadata = {
+        "issuer": ps_id,
         "token_endpoint": token_endpoint,
-        "interaction_endpoint": interaction_endpoint,
         "jwks_uri": jwks_uri,
     }
+    if mission_endpoint is not None:
+        metadata["mission_endpoint"] = mission_endpoint
+    if mission_control_endpoint is not None:
+        metadata["mission_control_endpoint"] = mission_control_endpoint
+    return metadata
+
+# Backward-compatible alias
+generate_mm_metadata = generate_ps_metadata
+
+
+def generate_as_metadata(
+    as_id: str,
+    jwks_uri: str,
+    token_endpoint: str,
+) -> Dict[str, Any]:
+    """Generate Access Server (AS) metadata JSON.
+
+    Published at /.well-known/aauth-access.json.
+    Only PSes call ASes directly.
+
+    Args:
+        as_id: Access Server identifier (HTTPS URL) - REQUIRED
+        jwks_uri: URL to Access Server's JSON Web Key Set - REQUIRED
+        token_endpoint: URL where PSes send token requests - REQUIRED
+
+    Returns:
+        Access Server metadata dictionary
+    """
+    return {
+        "issuer": as_id,
+        "token_endpoint": token_endpoint,
+        "jwks_uri": jwks_uri,
+    }
+
+# Backward-compatible alias
+generate_auth_metadata = generate_as_metadata
 
 
 def fetch_metadata(url: str) -> Dict[str, Any]:

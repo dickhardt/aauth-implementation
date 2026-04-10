@@ -57,7 +57,7 @@ def poll_pending_url(
         max_polls: Maximum number of poll attempts
         default_wait: Default seconds between polls
         on_interaction: Callback when require=interaction is received.
-            Called with (interaction_endpoint, code). Agent should direct user there.
+            Called with (url, code). Agent should direct user there.
         on_clarification: Callback when clarification question is received.
             Called with (pending_url, question). Should return response string or None.
         sign_and_send_post: Function for POST requests (needed for clarification responses).

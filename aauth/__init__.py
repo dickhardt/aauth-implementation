@@ -11,7 +11,7 @@ from .errors import (
     MetadataError,
     JWKSError,
     build_error_response,
-    # AAuth-Error header codes (draft-hardt-aauth-headers)
+    # Signature-Error header codes (draft-hardt-httpbis-signature-key)
     ERROR_INVALID_REQUEST,
     ERROR_INVALID_INPUT,
     ERROR_INVALID_SIGNATURE,
@@ -81,11 +81,21 @@ from .tokens.agent_token import create_agent_token, verify_agent_token
 from .tokens.auth_token import create_auth_token, parse_token_claims, verify_token
 from .tokens.resource_token import create_resource_token
 
-# Header handling
+# Header handling — Accept-Signature (signature-level challenges)
+from .headers.accept_signature import (
+    build_accept_signature,
+    parse_accept_signature,
+    SIGKEY_JKT,
+    SIGKEY_URI,
+    SIGKEY_X509,
+)
+
+# Header handling — AAuth-Requirement (protocol-level requirements)
 from .headers.signature_key import build_signature_key_header, parse_signature_key
 from .headers.signature_input import build_signature_input_header, parse_signature_input
 from .headers.signature import build_signature_header, parse_signature
 from .headers.agent_auth import parse_agent_auth_header, build_agent_auth_challenge
+from .headers.aauth_mission import build_aauth_mission, parse_aauth_mission, mission_from_header
 from .headers.aauth_header import (
     parse_aauth_header,
     parse_aauth_requirement,
@@ -109,12 +119,33 @@ from .headers.aauth_header import (
     REQUIRE_AUTH_TOKEN,
     REQUIRE_INTERACTION,
     REQUIRE_APPROVAL,
+    REQUIRE_CLARIFICATION,
+    REQUIRE_CLAIMS,
+    build_clarification_requirement,
+    build_claims_requirement,
 )
+
+# Header handling — AAuth-Capabilities and AAuth-Access
+from .headers.aauth_capabilities import (
+    build_aauth_capabilities,
+    parse_aauth_capabilities,
+    CAPABILITY_INTERACTION,
+    CAPABILITY_CLARIFICATION,
+    CAPABILITY_PAYMENT,
+)
+from .headers.aauth_access import build_aauth_access, parse_aauth_access
 
 # Metadata
 from .metadata.agent import generate_agent_metadata
 from .metadata.resource import generate_resource_metadata
-from .metadata.auth_server import generate_auth_metadata, fetch_auth_metadata, fetch_metadata
+from .metadata.auth_server import (
+    generate_ps_metadata,
+    generate_mm_metadata,
+    generate_as_metadata,
+    generate_auth_metadata,
+    fetch_auth_metadata,
+    fetch_metadata,
+)
 
 # Agent role
 from .agent.signer import AgentRequestSigner
@@ -200,15 +231,14 @@ __all__ = [
     "verify_token",
     "create_resource_token",
 
-    # Header handling
-    "build_signature_key_header",
-    "parse_signature_key",
-    "build_signature_input_header",
-    "parse_signature_input",
-    "build_signature_header",
-    "parse_signature",
-    "parse_agent_auth_header",
-    "build_agent_auth_challenge",
+    # Accept-Signature header
+    "build_accept_signature",
+    "parse_accept_signature",
+    "SIGKEY_JKT",
+    "SIGKEY_URI",
+    "SIGKEY_X509",
+
+    # AAuth-Requirement header
     "parse_aauth_header",
     "parse_aauth_requirement",
     "parse_signature_requirement",
@@ -217,14 +247,58 @@ __all__ = [
     "build_auth_token_requirement",
     "build_interaction_requirement",
     "build_approval_requirement",
+    "build_clarification_requirement",
+    "build_claims_requirement",
+
+    # Signature-Key / Signature-Input / Signature headers
+    "build_signature_key_header",
+    "parse_signature_key",
+    "build_signature_input_header",
+    "parse_signature_input",
+    "build_signature_header",
+    "parse_signature",
+
+    # AAuth-Mission header
+    "build_aauth_mission",
+    "parse_aauth_mission",
+    "mission_from_header",
+
+    # AAuth-Capabilities header
+    "build_aauth_capabilities",
+    "parse_aauth_capabilities",
+    "CAPABILITY_INTERACTION",
+    "CAPABILITY_CLARIFICATION",
+    "CAPABILITY_PAYMENT",
+
+    # AAuth-Access header
+    "build_aauth_access",
+    "parse_aauth_access",
+
+    # Signature-Error header
     "build_aauth_error",
     "build_signature_error",
     "parse_aauth_error",
     "parse_signature_error",
 
+    # Requirement constants
+    "REQUIRE_PSEUDONYM",
+    "REQUIRE_IDENTITY",
+    "REQUIRE_AUTH_TOKEN",
+    "REQUIRE_INTERACTION",
+    "REQUIRE_APPROVAL",
+    "REQUIRE_CLARIFICATION",
+    "REQUIRE_CLAIMS",
+
+    # Backward-compatible aliases
+    "parse_agent_auth_header",
+    "build_agent_auth_challenge",
+
     # Metadata
     "generate_agent_metadata",
     "generate_resource_metadata",
+    "generate_ps_metadata",
+    "generate_mm_metadata",
+    "generate_as_metadata",
     "generate_auth_metadata",
     "fetch_auth_metadata",
     "fetch_metadata",

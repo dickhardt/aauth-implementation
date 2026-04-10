@@ -14,9 +14,11 @@ from aauth.keys.jwk import public_key_to_jwk
 
 
 def run_server(server):
-    """Run a server in a separate thread."""
+    """Run a server in a separate thread. Silently ignores port-in-use errors."""
     try:
         server.run()
+    except SystemExit:
+        pass  # Port already in use from a prior test
     except:
         pass
 
@@ -96,7 +98,7 @@ class TestAuthTokenClaims:
         payload = claims["payload"]
 
         # Verify dwk claim is present with correct value
-        assert payload["dwk"] == "aauth-issuer.json"
+        assert payload["dwk"] == "aauth-access.json"
 
     def test_create_auth_token_has_jti_claim(self):
         """Test that auth token includes jti claim for replay detection."""
@@ -200,171 +202,189 @@ async def test_token_exchange_flow(
 
 
 @pytest.mark.asyncio
-async def test_token_exchange_returns_required_claims(
-    agent1, resource1, resource2, auth_server1, auth_server2,
-    agent1_id, resource1_id, resource2_id, auth1_id, auth2_id
-):
+async def test_token_exchange_returns_required_claims():
     """Test that token exchange returns required claims per updated spec."""
     from flows.autonomous import run_autonomous_flow
     from aauth.signing.signer import sign_request
-    
+
+    # Use unique ports to avoid conflicts with other tests
+    _agent1_id = "http://127.0.0.1:8071"
+    _resource1_id = "http://127.0.0.1:8072"
+    _auth1_id = "http://127.0.0.1:8073"
+    _resource2_id = "http://127.0.0.1:8074"
+    _auth2_id = "http://127.0.0.1:8075"
+
+    _agent1 = Agent(_agent1_id, port=8071, use_user_simulator=True)
+    _resource1 = Resource(_resource1_id, port=8072, auth_server=_auth1_id)
+    _resource2 = Resource(_resource2_id, port=8074, auth_server=_auth2_id)
+    _auth_server1 = AuthServer(_auth1_id, port=8073, require_user_consent=False)
+    _auth_server2 = AuthServer(_auth2_id, port=8075, require_user_consent=False, trusted_auth_servers=[_auth1_id])
+
     # Start all servers
     threads = [
-        threading.Thread(target=run_server, args=(agent1,), daemon=True),
-        threading.Thread(target=run_server, args=(resource1,), daemon=True),
-        threading.Thread(target=run_server, args=(resource2,), daemon=True),
-        threading.Thread(target=run_server, args=(auth_server1,), daemon=True),
-        threading.Thread(target=run_server, args=(auth_server2,), daemon=True),
+        threading.Thread(target=run_server, args=(_agent1,), daemon=True),
+        threading.Thread(target=run_server, args=(_resource1,), daemon=True),
+        threading.Thread(target=run_server, args=(_resource2,), daemon=True),
+        threading.Thread(target=run_server, args=(_auth_server1,), daemon=True),
+        threading.Thread(target=run_server, args=(_auth_server2,), daemon=True),
     ]
-    
+
     for t in threads:
         t.start()
-    
+
     await asyncio.sleep(2)
-    
+
     try:
         # Get auth token for Resource 1
-        resource1_url = f"{resource1_id}/data-auth"
+        resource1_url = f"{_resource1_id}/data-auth"
         await run_autonomous_flow(
-            agent=agent1,
-            resource=resource1,
-            auth_server=auth_server1,
+            agent=_agent1,
+            resource=_resource1,
+            auth_server=_auth_server1,
             resource_url=resource1_url,
             method="GET"
         )
-        
-        auth_token_for_r1 = agent1.auth_token
+
+        auth_token_for_r1 = _agent1.auth_token
         assert auth_token_for_r1 is not None
-        
+
         # Get resource token from Resource 2 by sending a signed request
         import httpx
         import re
-        
+
         # Sign the request with Resource 1's identity
-        resource2_data_url = f"{resource2_id}/data-auth"
+        resource2_data_url = f"{_resource2_id}/data-auth"
         sig_headers = sign_request(
             method="GET",
             target_uri=resource2_data_url,
             headers={},
             body=b"",
-            private_key=resource1.private_key,
+            private_key=_resource1.private_key,
             sig_scheme="jwks_uri",
-            id=resource1.resource_id,
-            kid=resource1.kid,
+            id=_resource1.resource_id,
+            kid=_resource1.kid,
         )
-        
+
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
-        
-        agent_auth_header = initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+
+        agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("Accept-Signature", "") or initial_response.headers.get("Signature-Requirement", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
-        
+
         assert resource_token_match, f"Should have resource_token in challenge, got: {agent_auth_header}"
         resource_token = resource_token_match.group(1)
-        
+
         # Perform token exchange
-        exchanged_token = await resource1._exchange_token(
-            auth_server=auth2_id,
+        exchanged_token = await _resource1._exchange_token(
+            auth_server=_auth2_id,
             resource_token=resource_token,
             upstream_auth_token=auth_token_for_r1
         )
-        
+
         assert exchanged_token is not None, "Should obtain exchanged token"
-        
+
         # Parse and verify required claims
         claims = parse_token_claims(exchanged_token)
         payload = claims["payload"]
-        
+
         # Required/conditional claims in updated spec
-        assert payload["iss"] == auth2_id, "Issuer should be Auth Server 2"
-        assert payload["aud"] == resource2_id, "Audience should be Resource 2"
-        assert payload["agent"] == resource1_id, "Agent should be Resource 1 (as agent)"
+        assert payload["iss"] == _auth2_id, "Issuer should be Auth Server 2"
+        assert payload["aud"] == _resource2_id, "Audience should be Resource 2"
+        assert payload["agent"] == _resource1_id, "Agent should be Resource 1 (as agent)"
         assert "sub" in payload or "scope" in payload, "Auth token must include at least one of sub or scope"
-        
+
         # Legacy act claim is no longer spec-required
         assert "act" not in payload, "act claim should not be present for updated spec compliance"
-        
+
     except Exception as e:
         pytest.fail(f"Required claim verification failed: {e}")
 
 
 @pytest.mark.asyncio
-async def test_untrusted_auth_server_rejected(
-    agent1, resource1, resource2, auth_server1,
-    agent1_id, resource1_id, resource2_id, auth1_id, auth2_id
-):
+async def test_untrusted_auth_server_rejected():
     """Test that token exchange fails when upstream auth server is not trusted."""
     from flows.autonomous import run_autonomous_flow
     from aauth.signing.signer import sign_request
-    
-    # Create Auth Server 2 WITHOUT trusting Auth Server 1
-    auth_server2_untrusted = AuthServer(
-        auth2_id,
-        port=8005,
+
+    # Use unique ports to avoid conflicts with other tests
+    _agent1_id = "http://127.0.0.1:8081"
+    _resource1_id = "http://127.0.0.1:8082"
+    _auth1_id = "http://127.0.0.1:8083"
+    _resource2_id = "http://127.0.0.1:8084"
+    _auth2_id = "http://127.0.0.1:8085"
+
+    _agent1 = Agent(_agent1_id, port=8081, use_user_simulator=True)
+    _resource1 = Resource(_resource1_id, port=8082, auth_server=_auth1_id)
+    _resource2 = Resource(_resource2_id, port=8084, auth_server=_auth2_id)
+    _auth_server1 = AuthServer(_auth1_id, port=8083, require_user_consent=False)
+    # Auth Server 2 does NOT trust Auth Server 1
+    _auth_server2_untrusted = AuthServer(
+        _auth2_id,
+        port=8085,
         require_user_consent=False,
         trusted_auth_servers=[]  # Empty - doesn't trust anyone
     )
-    
+
     # Start servers
     threads = [
-        threading.Thread(target=run_server, args=(agent1,), daemon=True),
-        threading.Thread(target=run_server, args=(resource1,), daemon=True),
-        threading.Thread(target=run_server, args=(resource2,), daemon=True),
-        threading.Thread(target=run_server, args=(auth_server1,), daemon=True),
-        threading.Thread(target=run_server, args=(auth_server2_untrusted,), daemon=True),
+        threading.Thread(target=run_server, args=(_agent1,), daemon=True),
+        threading.Thread(target=run_server, args=(_resource1,), daemon=True),
+        threading.Thread(target=run_server, args=(_resource2,), daemon=True),
+        threading.Thread(target=run_server, args=(_auth_server1,), daemon=True),
+        threading.Thread(target=run_server, args=(_auth_server2_untrusted,), daemon=True),
     ]
-    
+
     for t in threads:
         t.start()
-    
+
     await asyncio.sleep(2)
-    
+
     try:
         # Get auth token for Resource 1
-        resource1_url = f"{resource1_id}/data-auth"
+        resource1_url = f"{_resource1_id}/data-auth"
         await run_autonomous_flow(
-            agent=agent1,
-            resource=resource1,
-            auth_server=auth_server1,
+            agent=_agent1,
+            resource=_resource1,
+            auth_server=_auth_server1,
             resource_url=resource1_url,
             method="GET"
         )
-        
-        auth_token_for_r1 = agent1.auth_token
+
+        auth_token_for_r1 = _agent1.auth_token
         assert auth_token_for_r1 is not None
-        
+
         # Get resource token from Resource 2 by sending a signed request
         import httpx
         import re
-        
-        resource2_data_url = f"{resource2_id}/data-auth"
+
+        resource2_data_url = f"{_resource2_id}/data-auth"
         sig_headers = sign_request(
             method="GET",
             target_uri=resource2_data_url,
             headers={},
             body=b"",
-            private_key=resource1.private_key,
+            private_key=_resource1.private_key,
             sig_scheme="jwks_uri",
-            id=resource1.resource_id,
-            kid=resource1.kid,
+            id=_resource1.resource_id,
+            kid=_resource1.kid,
         )
-        
+
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
-        
-        agent_auth_header = initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+
+        agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("Accept-Signature", "") or initial_response.headers.get("Signature-Requirement", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
-        
+
         assert resource_token_match, f"Should have resource_token in challenge"
         resource_token = resource_token_match.group(1)
-        
+
         # Token exchange should fail
-        exchanged_token = await resource1._exchange_token(
-            auth_server=auth2_id,
+        exchanged_token = await _resource1._exchange_token(
+            auth_server=_auth2_id,
             resource_token=resource_token,
             upstream_auth_token=auth_token_for_r1
         )
-        
+
         # Should return None since exchange should fail
         assert exchanged_token is None, "Token exchange should fail when auth server is not trusted"
         
