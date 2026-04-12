@@ -8,22 +8,26 @@ from participants.agent import Agent
 from participants.auth_server import AuthServer
 
 
-def test_agent_metadata_declares_clarification_support_by_default():
-    """Agent metadata includes clarification_supported=true by default."""
+def test_agent_metadata_uses_issuer_field():
+    """Agent metadata uses 'issuer' field per spec."""
     agent = Agent("http://127.0.0.1:8001", port=8001)
     client = TestClient(agent.app)
     r = client.get("/.well-known/aauth-agent.json")
     assert r.status_code == 200
-    assert r.json().get("clarification_supported") is True
+    data = r.json()
+    assert data["issuer"] == "http://127.0.0.1:8001"
+    assert "jwks_uri" in data
+    # clarification_supported moved to AAuth-Capabilities header
+    assert "clarification_supported" not in data
 
 
-def test_agent_metadata_can_disable_clarification_support():
-    """Agent metadata can explicitly disable clarification support."""
+def test_agent_metadata_no_clarification_in_metadata():
+    """Agent metadata does not include clarification_supported (now in AAuth-Capabilities)."""
     agent = Agent("http://127.0.0.1:8001", port=8001, clarification_supported=False)
     client = TestClient(agent.app)
     r = client.get("/.well-known/aauth-agent.json")
     assert r.status_code == 200
-    assert r.json().get("clarification_supported") is False
+    assert "clarification_supported" not in r.json()
 
 
 def test_pending_get_includes_clarification_when_supported():

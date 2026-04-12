@@ -12,7 +12,10 @@ def generate_ps_metadata(
     jwks_uri: str,
     token_endpoint: str,
     mission_endpoint: Optional[str] = None,
+    permission_endpoint: Optional[str] = None,
+    audit_endpoint: Optional[str] = None,
     mission_control_endpoint: Optional[str] = None,
+    revocation_endpoint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate Person Server (PS) metadata JSON.
 
@@ -24,7 +27,10 @@ def generate_ps_metadata(
         jwks_uri: URL to PS's JSON Web Key Set - REQUIRED
         token_endpoint: URL where agents send token requests - REQUIRED
         mission_endpoint: URL for mission lifecycle operations (optional)
+        permission_endpoint: URL where agents request permission (optional)
+        audit_endpoint: URL where agents log actions (optional)
         mission_control_endpoint: URL for mission administrative interface (optional)
+        revocation_endpoint: URL where authorized parties can revoke tokens (optional)
 
     Returns:
         PS metadata dictionary
@@ -36,8 +42,14 @@ def generate_ps_metadata(
     }
     if mission_endpoint is not None:
         metadata["mission_endpoint"] = mission_endpoint
+    if permission_endpoint is not None:
+        metadata["permission_endpoint"] = permission_endpoint
+    if audit_endpoint is not None:
+        metadata["audit_endpoint"] = audit_endpoint
     if mission_control_endpoint is not None:
         metadata["mission_control_endpoint"] = mission_control_endpoint
+    if revocation_endpoint is not None:
+        metadata["revocation_endpoint"] = revocation_endpoint
     return metadata
 
 # Backward-compatible alias
@@ -48,6 +60,7 @@ def generate_as_metadata(
     as_id: str,
     jwks_uri: str,
     token_endpoint: str,
+    revocation_endpoint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate Access Server (AS) metadata JSON.
 
@@ -58,15 +71,19 @@ def generate_as_metadata(
         as_id: Access Server identifier (HTTPS URL) - REQUIRED
         jwks_uri: URL to Access Server's JSON Web Key Set - REQUIRED
         token_endpoint: URL where PSes send token requests - REQUIRED
+        revocation_endpoint: URL where authorized parties can revoke tokens (optional)
 
     Returns:
         Access Server metadata dictionary
     """
-    return {
+    metadata = {
         "issuer": as_id,
         "token_endpoint": token_endpoint,
         "jwks_uri": jwks_uri,
     }
+    if revocation_endpoint is not None:
+        metadata["revocation_endpoint"] = revocation_endpoint
+    return metadata
 
 # Backward-compatible alias
 generate_auth_metadata = generate_as_metadata

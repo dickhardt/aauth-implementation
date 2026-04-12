@@ -96,7 +96,6 @@ class Agent:
             return generate_agent_metadata(
                 self.agent_id,
                 jwks_uri,
-                clarification_supported=self.clarification_supported,
             )
         
         @self.app.get("/callback")
