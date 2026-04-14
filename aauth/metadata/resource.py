@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 def generate_resource_metadata(
     resource_id: str,
     jwks_uri: str,
-    authorization_endpoint: str,
+    authorization_endpoint: Optional[str] = None,
     client_name: Optional[str] = None,
     logo_uri: Optional[str] = None,
     logo_dark_uri: Optional[str] = None,
@@ -24,7 +24,8 @@ def generate_resource_metadata(
     Args:
         resource_id: Resource identifier (HTTPS URL) - REQUIRED
         jwks_uri: URL to resource's JSON Web Key Set - REQUIRED
-        authorization_endpoint: URL where agents request authorization - REQUIRED
+        authorization_endpoint: URL where agents request authorization (optional).
+            When absent, the resource issues resource tokens via 401 responses.
         client_name: Human-readable resource name (optional)
         logo_uri: URL to resource logo (optional)
         logo_dark_uri: URL to resource logo for dark backgrounds (optional)
@@ -40,9 +41,10 @@ def generate_resource_metadata(
     metadata = {
         "issuer": resource_id,
         "jwks_uri": jwks_uri,
-        "authorization_endpoint": authorization_endpoint,
     }
 
+    if authorization_endpoint is not None:
+        metadata["authorization_endpoint"] = authorization_endpoint
     if client_name is not None:
         metadata["client_name"] = client_name
     if logo_uri is not None:

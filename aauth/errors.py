@@ -28,6 +28,7 @@ ERROR_ABANDONED = "abandoned"
 ERROR_EXPIRED = "expired"
 ERROR_INVALID_CODE = "invalid_code"
 ERROR_SLOW_DOWN = "slow_down"
+ERROR_INTERACTION_REQUIRED = "interaction_required"
 
 # Removed from spec:
 # ERROR_KEY_BINDING_FAILED - no longer a separate error code

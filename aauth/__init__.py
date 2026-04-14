@@ -33,6 +33,7 @@ from .errors import (
     ERROR_EXPIRED,
     ERROR_INVALID_CODE,
     ERROR_SLOW_DOWN,
+    ERROR_INTERACTION_REQUIRED,
 )
 
 # Identifiers
@@ -187,6 +188,7 @@ __all__ = [
     "ERROR_EXPIRED",
     "ERROR_INVALID_CODE",
     "ERROR_SLOW_DOWN",
+    "ERROR_INTERACTION_REQUIRED",
 
     # Identifiers
     "validate_server_identifier",

@@ -16,6 +16,8 @@ def generate_ps_metadata(
     audit_endpoint: Optional[str] = None,
     mission_control_endpoint: Optional[str] = None,
     revocation_endpoint: Optional[str] = None,
+    scopes_supported: Optional[list] = None,
+    claims_supported: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Generate Person Server (PS) metadata JSON.
 
@@ -31,6 +33,8 @@ def generate_ps_metadata(
         audit_endpoint: URL where agents log actions (optional)
         mission_control_endpoint: URL for mission administrative interface (optional)
         revocation_endpoint: URL where authorized parties can revoke tokens (optional)
+        scopes_supported: Array of scope values the PS supports (optional, RECOMMENDED)
+        claims_supported: Array of identity claim names the PS can provide (optional, RECOMMENDED)
 
     Returns:
         PS metadata dictionary
@@ -50,6 +54,10 @@ def generate_ps_metadata(
         metadata["mission_control_endpoint"] = mission_control_endpoint
     if revocation_endpoint is not None:
         metadata["revocation_endpoint"] = revocation_endpoint
+    if scopes_supported is not None:
+        metadata["scopes_supported"] = scopes_supported
+    if claims_supported is not None:
+        metadata["claims_supported"] = claims_supported
     return metadata
 
 # Backward-compatible alias
